@@ -1,0 +1,109 @@
+const serviceAPIRequest = async (body, event_type, url) => {
+  try {
+    const headers = {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    };
+
+    const res = await fetch(url, {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers,
+    });
+
+    let result = await res.text();
+
+    console.log('DEBUG: Service API response: ', {
+      status: res.status,
+      body: result,
+    });
+
+    if (!res.ok) {
+      console.error(`ERROR: Error occurred on req: ${event_type}`, result);
+      return;
+    }
+
+    try {
+      result = JSON.parse(result);
+    } catch (e) {
+      console.error(
+        'ERROR: Invalid JSON returned from service API, Response:',
+        result,
+      );
+      return;
+    }
+
+    return result;
+  } catch (e) {
+    console.error(e);
+    console.error('ERROR: Exception when calling service API', e.message);
+  }
+};
+
+exports.handler = async (event) => {
+  console.log('INFO: Lambda started, received event: ', event);
+
+  if (!event.Records.length) return 'No Records';
+
+  console.log('DEBUG: Total Records received: ', event.Records.length);
+  const responses = [];
+
+  console.log('INFO: Processing started');
+
+  try {
+    for (const record of event.Records) {
+      const jiraBody = JSON.parse(record.body);
+      const issueEventTypeName = jiraBody?.issue_event_type_name;
+      const jiraIssueBody = jiraBody?.issue;
+
+      console.log('DEBUG: Parsed Jira Body: ', jiraBody);
+      console.log('DEBUG: Issue Event Type: ', issueEventTypeName);
+      console.log('DEBUG: Issue Body: ', jiraIssueBody);
+      console.log(
+        `DEBUG: Processing MessageID=${record.messageId}, Issue Key=${jiraIssueBody.key}, Body: `,
+        jiraBody,
+      );
+
+      switch (issueEventTypeName) {
+        case 'issue_generic':
+        case 'issue_updated':
+        case 'issue_assigned':
+          responses.push(
+            await serviceAPIRequest(
+              jiraBody,
+              issueEventTypeName,
+              process.env.SERVICE_API_WEBHOOK_UPDATE_ENDPOINT,
+            ),
+          );
+          break;
+        case 'issue_created':
+          responses.push(
+            await serviceAPIRequest(
+              jiraBody,
+              issueEventTypeName,
+              process.env.SERVICE_API_WEBHOOK_CREATE_ENDPOINT,
+            ),
+          );
+      }
+
+      console.log(
+        `INFO: Issue ID=${jiraIssueBody.id}, Key=${jiraIssueBody.key} processing completed`,
+      );
+    }
+
+    console.log('INFO: Lambda finished');
+
+    return {
+      statusCode: 200,
+      body: JSON.stringify(responses),
+    };
+  } catch (e) {
+    console.error(e);
+    console.error(`ERROR: error occurred: `, e.message);
+
+    return {
+      statusCode: 500,
+      error: e.message,
+    };
+  }
+};
